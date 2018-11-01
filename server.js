@@ -5,7 +5,6 @@ const morgan = require('morgan');
 const mongoose = require('mongoose');
 const usersRouter = require('./routes/users');
 const passport = require('passport');
-console.log("original declaration: ", passport);
 const localStrategy = require('./passport/local');
 const jwtStrategy = require('./passport/jwt');
 
