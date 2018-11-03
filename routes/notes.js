@@ -132,11 +132,11 @@ router.post('/', (req, res, next) => {
   }
 
   Promise.all([
-    validateFolderId(folderId, userId),
-    validateTagIds(tags, userId)
+    validateFolderId(newNote.folderId, userId),
+    validateTagIds(newNote.tags, userId)
   ])
     .then(() => {
-      Note.create(newNote)
+      return Note.create(newNote)
         .then(result => {
           res.location(`${req.originalUrl}/${result.id}`).status(201).json(result);
         });
@@ -184,7 +184,6 @@ router.put('/:id', (req, res, next) => {
     validateTagIds(toUpdate.tags, userId)
   ])
     .then(() => {
-      console.log('id is: ', id, 'userId is: ', userId);
       Note.findOneAndUpdate({_id : id, userId}, toUpdate, { new: true })
         .populate('tags')
         .then(result => {

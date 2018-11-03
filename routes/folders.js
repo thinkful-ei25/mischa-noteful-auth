@@ -130,17 +130,8 @@ router.delete('/:id', (req, res, next) => {
   );
 
   Promise.all([folderRemovePromise, noteRemovePromise])
-    .then((result) => {
-      
-      if(!result[0]){
-        console.log(result[0]);
-        const err = 'Note not found';
-        err.status = (404);
-        Promise.reject(err);
-      }else{
-        res.sendStatus(204);
-      }
-      
+    .then(() => {
+      res.sendStatus(204);
     })
     .catch(err => {
       next(err);

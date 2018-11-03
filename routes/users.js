@@ -18,8 +18,7 @@ router.get('/', (req, res, next) => {
 
 /* ========== POST/CREATE AN ITEM ========== */
 router.post('/', (req, res, next) => {
-  const { fullName, username, password } = req.body;
-
+  const { fullname, username, password } = req.body;
   const requiredFields = ['username', 'password'];
   const missingField = requiredFields.find(field => !(field in req.body));
   // const newUser = { fullName, username, password  };
@@ -33,7 +32,7 @@ router.post('/', (req, res, next) => {
     });
   }
 
-  const stringFields = ['username', 'password', 'fullName'];
+  const stringFields = ['username', 'password', 'fullname'];
   const nonStringField = stringFields.find(
     field => field in req.body && typeof req.body[field] !== 'string'
   );
@@ -90,6 +89,7 @@ router.post('/', (req, res, next) => {
     });
   }
 
+
   User.find({username})
     .then(() => {
       return User.hashPassword(password)
@@ -97,8 +97,9 @@ router.post('/', (req, res, next) => {
           const newUser = {
             username, 
             password: digest, 
-            fullName
+            fullname
           };
+          newUser.fullname = newUser.fullname.trim();
           return User.create(newUser);
         })
         .then(result => {

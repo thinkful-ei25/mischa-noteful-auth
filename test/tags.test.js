@@ -1,4 +1,3 @@
-'use strict';
 
 const chai = require('chai');
 const chaiHttp = require('chai-http');
@@ -9,48 +8,59 @@ const sinon = require('sinon');
 const app = require('../server');
 const Tag = require('../models/tag');
 const Note = require('../models/note');
-const { notes, tags } = require('../db/data');
+const User = require('../models/user');
+const  tags  = require('../db/seed/tags');
+const  notes  = require('../db/seed/notes');
+const  users  = require('../db/seed/users');
 const { TEST_MONGODB_URI } = require('../config');
+const {JWT_SECRET} = require('../config');
+const jwt = require('jsonwebtoken');
 
 chai.use(chaiHttp);
 const expect = chai.expect;
 const sandbox = sinon.createSandbox();
 
 describe('Noteful API - Tags', function () {
-
+  let token;
+  let user;
+  let user2;
   before(function () {
     return mongoose.connect(TEST_MONGODB_URI, { useNewUrlParser: true, useCreateIndex : true })
-      .then(() => Promise.all([
-        Note.deleteMany(),
-        Tag.deleteMany()
-      ]));
+      .then(() => mongoose.connection.db.dropDatabase());
   });
 
   beforeEach(function () {
     return Promise.all([
+      // Note.insertMany(notes),
+      User.insertMany(users),
+      Note.insertMany(notes),
       Tag.insertMany(tags),
-      Note.insertMany(notes)
-    ]);
+      Tag.createIndexes()
+    ])
+      .then(([users]) => {
+        user = users[0];
+        user2 = users[1];
+        token = jwt.sign({ user }, JWT_SECRET, { subject: user.username });
+      });
   });
 
   afterEach(function () {
     sandbox.restore();
-    return Promise.all([
-      Note.deleteMany(),
-      Tag.deleteMany()
-    ]);
+    return mongoose.connection.db.dropDatabase();
   });
 
   after(function () {
     return mongoose.disconnect();
   });
-
+  
   describe('GET /api/tags', function () {
 
     it('should return the correct number of tags', function () {
       return Promise.all([
-        Tag.find(),
-        chai.request(app).get('/api/tags')
+        Tag.find({userId: user.id}),
+        chai.request(app)
+          .get('/api/tags')
+          .set('Authorization', `Bearer ${token}`)
       ])
         .then(([data, res]) => {
           expect(res).to.have.status(200);
@@ -62,8 +72,11 @@ describe('Noteful API - Tags', function () {
 
     it('should return a list sorted by name with the correct fields and values', function () {
       return Promise.all([
-        Tag.find().sort('name'),
-        chai.request(app).get('/api/tags')
+        Tag.find({userId: user.id}).sort('name'),
+        chai.request(app)
+          .get('/api/tags')
+          .set('Authorization', `Bearer ${token}`)
+
       ])
         .then(([data, res]) => {
           expect(res).to.have.status(200);
@@ -72,7 +85,7 @@ describe('Noteful API - Tags', function () {
           expect(res.body).to.have.length(data.length);
           res.body.forEach(function (item, i) {
             expect(item).to.be.a('object');
-            expect(item).to.have.all.keys('id', 'name', 'createdAt', 'updatedAt');
+            expect(item).to.have.all.keys('id', 'name', 'createdAt', 'updatedAt', 'userId');
             expect(item.id).to.equal(data[i].id);
             expect(item.name).to.equal(data[i].name);
             expect(new Date(item.createdAt)).to.eql(data[i].createdAt);
@@ -84,7 +97,9 @@ describe('Noteful API - Tags', function () {
     it('should catch errors and respond properly', function () {
       sandbox.stub(Tag.schema.options.toJSON, 'transform').throws('FakeError');
 
-      return chai.request(app).get('/api/tags')
+      return chai.request(app)
+        .get('/api/tags')
+        .set('Authorization', `Bearer ${token}`)
         .then(res => {
           expect(res).to.have.status(500);
           expect(res).to.be.json;
@@ -92,24 +107,34 @@ describe('Noteful API - Tags', function () {
           expect(res.body.message).to.equal('Internal Server Error');
         });
     });
-
+    it('should get 401 unauthorized for invalid creds', function () {
+      sandbox.stub(Tag.schema.options.toJSON, 'transform').throws('FakeError');
+      return chai.request(app).get('/api/tags')
+        .then(res => {
+          expect(res).to.have.status(401);
+          expect(res).to.be.json;
+          expect(res.body).to.be.a('object');
+          expect(res.body.message).to.equal('Unauthorized');
+        });
+    });
   });
 
   describe('GET /api/tags/:id', function () {
 
     it('should return correct tags', function () {
       let data;
-      return Tag.findOne()
+      return Tag.findOne({userId: user.id})
         .then(_data => {
           data = _data;
           return chai.request(app)
-            .get(`/api/tags/${data.id}`);
+            .get(`/api/tags/${data.id}`)
+            .set('Authorization', `Bearer ${token}`);
         })
         .then((res) => {
           expect(res).to.have.status(200);
           expect(res).to.be.json;
           expect(res.body).to.be.an('object');
-          expect(res.body).to.have.all.keys('id', 'name', 'createdAt', 'updatedAt');
+          expect(res.body).to.have.all.keys('id', 'name', 'createdAt', 'updatedAt', 'userId');
           expect(res.body.id).to.equal(data.id);
           expect(res.body.name).to.equal(data.name);
           expect(new Date(res.body.createdAt)).to.eql(data.createdAt);
@@ -120,6 +145,7 @@ describe('Noteful API - Tags', function () {
     it('should respond with a 400 for an invalid id', function () {
       return chai.request(app)
         .get('/api/tags/NOT-A-VALID-ID')
+        .set('Authorization', `Bearer ${token}`)
         .then(res => {
           expect(res).to.have.status(400);
           expect(res.body.message).to.equal('The `id` is not valid');
@@ -130,6 +156,7 @@ describe('Noteful API - Tags', function () {
       // The string "DOESNOTEXIST" is 12 bytes which is a valid Mongo ObjectId
       return chai.request(app)
         .get('/api/tags/DOESNOTEXIST')
+        .set('Authorization', `Bearer ${token}`)
         .then(res => {
           expect(res).to.have.status(404);
         });
@@ -140,7 +167,7 @@ describe('Noteful API - Tags', function () {
 
       return Tag.findOne()
         .then(data => {
-          return chai.request(app).get(`/api/tags/${data.id}`);
+          return chai.request(app).get(`/api/tags/${data.id}`).set('Authorization', `Bearer ${token}`);
         })
         .then(res => {
           expect(res).to.have.status(500);
@@ -149,7 +176,18 @@ describe('Noteful API - Tags', function () {
           expect(res.body.message).to.equal('Internal Server Error');
         });
     });
-
+    it('should throw 404 with message Not Found if tag is not owned by user', function () {
+      let data;
+      return Tag.findOne({userId: user2.id})
+        .then(_data => {
+          data = _data;
+          return chai.request(app).get(`/api/tags/${data.id}`).set('Authorization', `Bearer ${token}`);
+        })
+        .then(res => {
+          expect(res).to.have.status(404);
+          expect(res.body.message).to.equal('Not Found');
+        });
+    });
   });
 
   describe('POST /api/tags', function () {
@@ -159,6 +197,7 @@ describe('Noteful API - Tags', function () {
       let body;
       return chai.request(app)
         .post('/api/tags')
+        .set('Authorization', `Bearer ${token}`)
         .send(newItem)
         .then(function (res) {
           body = res.body;
@@ -166,8 +205,8 @@ describe('Noteful API - Tags', function () {
           expect(res).to.have.header('location');
           expect(res).to.be.json;
           expect(body).to.be.a('object');
-          expect(body).to.have.all.keys('id', 'name', 'createdAt', 'updatedAt');
-          return Tag.findOne({ _id: body.id });
+          expect(body).to.have.all.keys('id', 'name', 'createdAt', 'updatedAt', 'userId');
+          return Tag.findById(body.id);
         })
         .then(data => {
           expect(body.id).to.equal(data.id);
@@ -181,6 +220,7 @@ describe('Noteful API - Tags', function () {
       const newItem = {};
       return chai.request(app)
         .post('/api/tags')
+        .set('Authorization', `Bearer ${token}`)
         .send(newItem)
         .then(res => {
           expect(res).to.have.status(400);
@@ -194,6 +234,7 @@ describe('Noteful API - Tags', function () {
       const newItem = { name: '' };
       return chai.request(app)
         .post('/api/tags')
+        .set('Authorization', `Bearer ${token}`)
         .send(newItem)
         .then(res => {
           expect(res).to.have.status(400);
@@ -204,11 +245,12 @@ describe('Noteful API - Tags', function () {
     });
 
     it('should return an error when given a duplicate name', function () {
-      return Tag.findOne()
+      return Tag.findOne({userId: user.id})
         .then(data => {
           const newItem = { name: data.name };
           return chai.request(app)
             .post('/api/tags')
+            .set('Authorization', `Bearer ${token}`)
             .send(newItem);
         })
         .then(res => {
@@ -225,6 +267,7 @@ describe('Noteful API - Tags', function () {
       const newItem = { name: 'newTag' };
       return chai.request(app)
         .post('/api/tags')
+        .set('Authorization', `Bearer ${token}`)
         .send(newItem)
         .then(res => {
           expect(res).to.have.status(500);
@@ -241,18 +284,19 @@ describe('Noteful API - Tags', function () {
     it('should update the tag', function () {
       const updateItem = { name: 'Updated Name' };
       let data;
-      return Tag.findOne()
+      return Tag.findOne({userId: user.id})
         .then(_data => {
           data = _data;
           return chai.request(app)
             .put(`/api/tags/${data.id}`)
+            .set('Authorization', `Bearer ${token}`)
             .send(updateItem);
         })
         .then(function (res) {
           expect(res).to.have.status(200);
           expect(res).to.be.json;
           expect(res.body).to.be.a('object');
-          expect(res.body).to.have.all.keys('id', 'name', 'createdAt', 'updatedAt');
+          expect(res.body).to.have.all.keys('id', 'name', 'createdAt', 'updatedAt', 'userId');
           expect(res.body.id).to.equal(data.id);
           expect(res.body.name).to.equal(updateItem.name);
           expect(new Date(res.body.createdAt)).to.eql(data.createdAt);
@@ -265,6 +309,7 @@ describe('Noteful API - Tags', function () {
       const updateItem = { name: 'Blah' };
       return chai.request(app)
         .put('/api/tags/NOT-A-VALID-ID')
+        .set('Authorization', `Bearer ${token}`)
         .send(updateItem)
         .then(res => {
           expect(res).to.have.status(400);
@@ -277,6 +322,7 @@ describe('Noteful API - Tags', function () {
       // The string "DOESNOTEXIST" is 12 bytes which is a valid Mongo ObjectId
       return chai.request(app)
         .put('/api/tags/DOESNOTEXIST')
+        .set('Authorization', `Bearer ${token}`)
         .send(updateItem)
         .then(res => {
           expect(res).to.have.status(404);
@@ -291,6 +337,7 @@ describe('Noteful API - Tags', function () {
           data = _data;
           return chai.request(app)
             .put(`/api/tags/${data.id}`)
+            .set('Authorization', `Bearer ${token}`)
             .send(updateItem);
         })
         .then(res => {
@@ -309,6 +356,7 @@ describe('Noteful API - Tags', function () {
           data = _data;
           return chai.request(app)
             .put(`/api/tags/${data.id}`)
+            .set('Authorization', `Bearer ${token}`)
             .send(updateItem);
         })
         .then(res => {
@@ -326,6 +374,7 @@ describe('Noteful API - Tags', function () {
           item1.name = item2.name;
           return chai.request(app)
             .put(`/api/tags/${item1.id}`)
+            .set('Authorization', `Bearer ${token}`)
             .send(item1);
         })
         .then(res => {
@@ -344,6 +393,7 @@ describe('Noteful API - Tags', function () {
         .then(data => {
           return chai.request(app)
             .put(`/api/tags/${data.id}`)
+            .set('Authorization', `Bearer ${token}`)
             .send(updateItem);
         })
         .then(res => {
@@ -353,18 +403,39 @@ describe('Noteful API - Tags', function () {
           expect(res.body.message).to.equal('Internal Server Error');
         });
     });
+    it('should allow user to update name of own tag with name owned by another user', function() {
+      const updateItem = {};
+      const id = '222222222222222222222225';
+      const newItem = {'name' : 'new tag!!', userId: user2.id, _id: id};
+      return Promise.all([
+        Tag.create(newItem),
+        Tag.findOne({userId: user.id})
+      ])
+        .then(([,res]) => {
+          updateItem.name = newItem.name;
 
+          return chai.request(app)
+            .put(`/api/tags/${res.id}`)
+            .set('Authorization', `Bearer ${token}`)
+            .send(updateItem);
+        })
+        .then((res) => {
+          expect(res).to.have.status(200);
+          expect(res.body.name).to.equal(newItem.name);
+        });
+    });
   });
 
   describe('DELETE /api/tags/:id', function () {
 
     it('should delete an existing tag and respond with 204', function () {
       let data;
-      return Tag.findOne()
+      return Tag.findOne({userId:user.id})
         .then(_data => {
           data = _data;
           return chai.request(app)
-            .delete(`/api/tags/${data.id}`);
+            .delete(`/api/tags/${data.id}`)
+            .set('Authorization', `Bearer ${token}`);
         })
         .then(function (res) {
           expect(res).to.have.status(204);
@@ -378,12 +449,13 @@ describe('Noteful API - Tags', function () {
 
     it('should delete an existing tag and remove tag reference from note', function () {
       let tagId;
-      return Note.findOne({ tags: { $exists: true, $ne: [] } })
+      return Note.findOne({ tags: { $exists: true, $ne: [] } , userId: user.id})
         .then(data => {
           tagId = data.tags[0];
 
           return chai.request(app)
-            .delete(`/api/tags/${tagId}`);
+            .delete(`/api/tags/${tagId}`)
+            .set('Authorization', `Bearer ${token}`);
         })
         .then(function (res) {
           expect(res).to.have.status(204);
@@ -398,6 +470,7 @@ describe('Noteful API - Tags', function () {
     it('should respond with a 400 for an invalid id', function () {
       return chai.request(app)
         .delete('/api/tags/NOT-A-VALID-ID')
+        .set('Authorization', `Bearer ${token}`)
         .then(res => {
           expect(res).to.have.status(400);
           expect(res.body.message).to.equal('The `id` is not valid');
@@ -408,7 +481,9 @@ describe('Noteful API - Tags', function () {
       sandbox.stub(express.response, 'sendStatus').throws('FakeError');
       return Tag.findOne()
         .then(data => {
-          return chai.request(app).delete(`/api/tags/${data.id}`);
+          return chai.request(app)
+            .delete(`/api/tags/${data.id}`)
+            .set('Authorization', `Bearer ${token}`);
         })
         .then(res => {
           expect(res).to.have.status(500);
@@ -417,7 +492,26 @@ describe('Noteful API - Tags', function () {
           expect(res.body.message).to.equal('Internal Server Error');
         });
     });
-
+    it('should return 204 AND not delete when trying to delete folder owned by another user', () => {
+      let data;
+      return Tag.findOne({userId: user2.id})
+        .then(_data => {
+          data = _data;
+          return chai.request(app)
+            .delete(`/api/tags/${data.id}`)
+            .set('Authorization', `Bearer ${token}`);
+        })
+        .then(res => {
+          expect(res).to.have.status(204);
+        })
+        .then(() => {
+          return Tag.findById(data.id);
+        })
+        .then(res => {
+          expect(res).to.be.a('object');
+          expect(res).to.deep.equal(data);
+        });
+    });
   });
 
 });
