@@ -211,7 +211,6 @@ router.delete('/:id', (req, res, next) => {
     err.status = 400;
     return next(err);
   }
-
   Note.findOneAndDelete({_id: id, userId})
     .then(() => {
       res.sendStatus(204);
